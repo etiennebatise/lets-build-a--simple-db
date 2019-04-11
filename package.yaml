@@ -35,6 +35,10 @@ executables:
     - -with-rtsopts=-N
     dependencies:
     - db
+    - parsec
+    - string-conversions
+    - text
+    - text-format
 
 tests:
   db-test:
