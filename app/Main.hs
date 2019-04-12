@@ -1,39 +1,62 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Main where
 
 import Control.Monad
+import Data.Either (either)
+import Data.List (lookup)
 import Data.String.Conversions
 import Data.Text
 import qualified Data.Text.Format as Fmt
 import Lib
-import Text.Parsec (parse)
-import Text.Parsec.Char (string)
+import Text.Parsec (Parsec, parse, try, choice, token)
+import Text.Parsec.Char (string, char, satisfy)
 import Text.Parsec.Error
-import Text.Parsec.Text (Parser)
+import Text.Parsec.String (Parser)
 import System.Exit
 import System.IO
 
+data MetaCommand = Exit
+  deriving (Read)
 
-cmdParser :: Text -> Parser Text
-cmdParser t = convertString <$> string (convertString t)
+instance Show MetaCommand where
+  show Exit = ".exit"
 
-exitParser :: Parser Text
-exitParser = cmdParser ".exit"
 
-parse' :: Parser a -> Text -> Either ParseError a
-parse' p i = parse p "" i
+metaCommands :: [(String, MetaCommand)]
+metaCommands =
+  [ (".exit", Exit) ]
+
+metaCommandParser :: Parser MetaCommand
+metaCommandParser = choice $ fmap (\(fst, snd) -> try $ snd <$ string fst) metaCommands
+
+metaParser :: Parser Char
+metaParser = char '.'
+
+parse' :: Parser a -> String -> Either ParseError a
+parse' p = parse p ""
 
 main :: IO ()
-main =
-  forever $ do
+main = forever $ do
     printPrompt
-    input <- convertString <$> getLine :: IO Text
-    case parse exitParser "" input of
-      Left e -> do
-        Fmt.print "Unrecognized command '{}'\n" (Fmt.Only input)
-        main
-      Right p -> exitSuccess
+    input <- getLine
+    either
+      (const $ handleStatement input)
+      (const $ handleMeta input)
+      $ parse' metaParser input
+  where
+    handleMeta i = case parse' metaCommandParser i of
+      Left e -> Fmt.print "Unrecognized command '{}'\n" (Fmt.Only i)
+      Right c -> executeMetaCommand c
+
+    handleStatement i = print "TODO"
+
+
+executeMetaCommand :: MetaCommand -> IO ()
+executeMetaCommand = \case
+  Exit -> exitSuccess
+
 
 printPrompt :: IO ()
 printPrompt = do
