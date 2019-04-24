@@ -1,9 +1,14 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
 
 module Main where
 
+import Debug.Trace
+
 import Control.Monad
+import Control.Monad.Reader
+import Control.Monad.Except
 import Data.Binary.Get as Get
 import Data.Binary.Put as Put
 import Data.Binary.Builder as Bld
@@ -14,6 +19,7 @@ import qualified Data.ByteString.Lazy as LB
 import Data.Either (either)
 import Data.Functor (($>))
 import Data.Int (Int32, Int64)
+import Data.IORef
 import Data.List (lookup)
 import Data.String.Conversions
 import qualified Data.Text.Format as Fmt
@@ -74,22 +80,30 @@ parse' p = parse p ""
 -- DB --
 --------
 
-type UserId = Int32
+type UserId = Int64
 type Username = String
 type Email = String
 
 type SizeInBytes = Int64
 
-idSizeInBytes ::SizeInBytes
-idSizeInBytes = 8
+idSize ::SizeInBytes
+idSize = 8
 
-usernameSizeInBytes ::SizeInBytes
-usernameSizeInBytes = 32
+idOffset = 0
 
-emailSizeInBytes ::SizeInBytes
-emailSizeInBytes = 255
+usernameSize ::SizeInBytes
+usernameSize = 32
 
-resize :: B.ByteString -> SizeInBytes-> B.ByteString
+usernameOffset = idOffset + idSize;
+
+emailSize ::SizeInBytes
+emailSize = 255
+
+emailOffset = usernameOffset + usernameSize;
+
+rowSize = idSize + usernameSize + emailSize;
+
+resize :: B.ByteString -> SizeInBytes -> B.ByteString
 resize text size = B.append prefix text
   where
     prefix = B.pack $ Prelude.replicate (fromIntegral size - B.length text) 0
@@ -105,58 +119,126 @@ class Serializable a where
   deserialize :: LB.ByteString -> a
 
 instance Serializable Row where
-  serialize row = let i = Bld.putInt32be $ rid row
-                      u = Bld.fromByteString $ resize (C.pack $ name row) usernameSizeInBytes
-                      e = Bld.fromByteString $ resize (C.pack $ email row) emailSizeInBytes
+  serialize row = let i = Bld.putInt64be $ rid row
+                      u = Bld.fromByteString $ resize (C.pack $ name row) usernameSize
+                      e = Bld.fromByteString $ resize (C.pack $ email row) emailSize
                       total = Bld.append (Bld.append i u) e
-                  in Bld.toLazyByteString total
+                      result = Bld.toLazyByteString total
+                  in traceShow (LB.length result) $ trace "Result: " result
+                  -- in if LB.length result == rowSize
+                  --    then result
+                  --    else error "Serialize doesn't work"
+
   deserialize = runGet $ do
-      index <- Get.getInt32be
+      index <- Get.getInt64be
       rem <- Get.getRemainingLazyByteString
-      let name = C.unpack $ LB.toStrict $ LB.dropWhile (== 0) $ LB.take usernameSizeInBytes rem
-          email = C.unpack $ LB.toStrict $ LB.dropWhile (== 0) $ LB.drop 32 rem
+      let name = C.unpack $
+                 LB.toStrict $
+                 LB.dropWhile (== 0) $
+                 LB.take usernameSize rem
+          email = C.unpack $
+                  LB.toStrict $
+                  LB.dropWhile (== 0) $
+                  LB.take emailSize $
+                  LB.drop usernameSize rem
       pure $ Row index name email
 
--- columnUsernameSize :: Int
--- columnUsernameSize = 32
+pageSize :: Int64
+pageSize = 4096;
 
--- columnEmailSize :: Int
--- columnEmailSize = 255
+tableMaxPages :: Int64
+tableMaxPages = 100;
 
--- idOffset = 0;
--- usernameOffset = idOffset + idSize;
--- emailOffset = usernameOffset + usernameSize;
--- rowSize = idSize + usernameSize + emailSize;
+rowsPerPage :: Int64
+rowsPerPage = div pageSize rowSize;
 
+tableMaxRows :: Int64
+tableMaxRows = rowsPerPage * tableMaxPages;
+
+data Table = Table
+  { pages :: [LB.ByteString]
+  , numberOfRows :: Int64
+  } deriving (Show)
+
+newTable :: Table
+newTable = Table (Prelude.replicate (fromIntegral tableMaxPages) LB.empty) 0
+
+readSlot :: Table -> Int64 -> Row
+readSlot table rowNumber =
+  let pageNumber = div rowNumber rowsPerPage
+      page = pages table !! fromIntegral pageNumber
+      rowOffset = mod rowNumber rowsPerPage
+      row = LB.take rowSize $ LB.drop (rowOffset * rowSize) page
+  in deserialize row
+
+writeSlot :: Table -> Int64 -> Row -> Table
+writeSlot table rowNumber row =
+  let pageNumber = div rowNumber rowsPerPage
+      (tablePrefix, page:tableSuffix) = splitAt (fromIntegral pageNumber) (pages table)
+      rowOffset = mod rowNumber rowsPerPage
+      prefix = LB.take (rowOffset  * rowSize) page
+      suffix = LB.drop ((rowOffset + 1) * rowSize) page
+      newPage = LB.concat [prefix, serialize row, suffix]
+      newPages = concat [tablePrefix, [newPage], tableSuffix]
+      newNumberOfRows = numberOfRows table + 1
+  in Table newPages newNumberOfRows
 
 ---------------
 -- EXECUTION --
 ---------------
+
+data ExecutionError = TableFull
+
+
 main :: IO ()
-main = forever $ do
+main = do
+  initTable <- newIORef newTable
+  forever $ do
     printPrompt
     input <- getLine
     either
-      (const $ handleStatement input)
+      (const $ handleStatement input initTable)
       (const $ handleMeta input)
       $ parse' metaParser input
   where
     handleMeta i = case parse' metaCommandParser i of
-      Left e -> Fmt.print "Unrecognized command '{}'\n" (Fmt.Only i)
-      Right c -> executeMetaCommand c
-    handleStatement i = case parse' statementParser i of
-      Left e -> Fmt.print "Unrecognized keyword at start of '{}'\n" (Fmt.Only i)
-      Right c -> executeStatement c
+      Left e -> do
+        Fmt.print "Unrecognized command '{}'" (Fmt.Only i)
+        putStrLn ""
+      Right c -> do
+        executeMetaCommand c
+    handleStatement i tableRef = case parse' statementParser i of
+      Left e -> do
+        Fmt.print "Unrecognized keyword at start of '{}'" (Fmt.Only i)
+        putStrLn ""
+      Right c -> do
+        table <- readIORef tableRef
+        writeIORef tableRef =<< executeStatement table c
 
 
 executeMetaCommand :: MetaCommand -> IO ()
 executeMetaCommand = \case
   Exit -> exitSuccess
 
-executeStatement :: Statement -> IO ()
-executeStatement = \case
-  Insert (Row uid name email) -> print "This is where we would do an insert.\n"
-  Select -> print "This is where we would do an select.\n"
+executeStatement :: Table -> Statement -> IO Table
+executeStatement t s = go <* putStrLn "Success"
+  where
+    go = case s of
+      Insert r -> executeInsert t r
+      Select ->  executeSelect t
+
+
+executeInsert :: Table -> Row -> IO Table
+executeInsert table row = pure $ writeSlot table (numberOfRows table) row
+
+executeSelect :: Table -> IO Table
+executeSelect table = do
+    let range = [0..(numberOfRows table - 1)]
+    putStrLn $ unlines $ fmap (show . rowToTuple . readSlot table) range
+    pure table
+
+rowToTuple :: Row -> (UserId, Username, Email)
+rowToTuple r = (rid r, name r, email r)
 
 printPrompt :: IO ()
 printPrompt = do

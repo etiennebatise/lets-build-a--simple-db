@@ -37,6 +37,7 @@ executables:
     - binary
     - bytestring
     - db
+    - mtl
     - parsec
     - string-conversions
     - text
