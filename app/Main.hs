@@ -26,7 +26,7 @@ import qualified Data.Text.Format as Fmt
 import Data.Tuple (uncurry, swap)
 import Data.Word
 import Lib
-import Text.Parsec (Parsec, parse, try, choice, token, many, many1)
+import Text.Parsec (Parsec, parse, try, choice, token, many, many1, (<?>) )
 import Text.Parsec.Char (string, char, satisfy, spaces, digit, alphaNum, letter)
 import Text.Parsec.Error
 import Text.Parsec.String (Parser)
@@ -124,10 +124,7 @@ instance Serializable Row where
                       e = Bld.fromByteString $ resize (C.pack $ email row) emailSize
                       total = Bld.append (Bld.append i u) e
                       result = Bld.toLazyByteString total
-                  in traceShow (LB.length result) $ trace "Result: " result
-                  -- in if LB.length result == rowSize
-                  --    then result
-                  --    else error "Serialize doesn't work"
+                  in result
 
   deserialize = runGet $ do
       index <- Get.getInt64be
@@ -204,38 +201,43 @@ main = do
     handleMeta i = case parse' metaCommandParser i of
       Left e -> do
         Fmt.print "Unrecognized command '{}'" (Fmt.Only i)
-        putStrLn ""
       Right c -> do
         executeMetaCommand c
     handleStatement i tableRef = case parse' statementParser i of
       Left e -> do
         Fmt.print "Unrecognized keyword at start of '{}'" (Fmt.Only i)
-        putStrLn ""
       Right c -> do
         table <- readIORef tableRef
-        writeIORef tableRef =<< executeStatement table c
+        statementResult <- executeStatement table c
+        case statementResult of
+          Left TableFull -> putStrLn "Error: Table full."
+          Right t -> do
+            writeIORef tableRef t
+            putStrLn "Success"
 
 
 executeMetaCommand :: MetaCommand -> IO ()
 executeMetaCommand = \case
   Exit -> exitSuccess
 
-executeStatement :: Table -> Statement -> IO Table
-executeStatement t s = go <* putStrLn "Success"
+executeStatement :: Table -> Statement -> IO (Either ExecutionError Table)
+executeStatement t s = go
   where
     go = case s of
       Insert r -> executeInsert t r
       Select ->  executeSelect t
 
 
-executeInsert :: Table -> Row -> IO Table
-executeInsert table row = pure $ writeSlot table (numberOfRows table) row
+executeInsert :: Table -> Row -> IO (Either ExecutionError Table)
+executeInsert table row = if numberOfRows table >= tableMaxRows
+                         then pure $ Left TableFull
+                         else pure $ Right $ writeSlot table (numberOfRows table) row
 
-executeSelect :: Table -> IO Table
+executeSelect :: Table -> IO (Either ExecutionError Table)
 executeSelect table = do
     let range = [0..(numberOfRows table - 1)]
     putStrLn $ unlines $ fmap (show . rowToTuple . readSlot table) range
-    pure table
+    pure $ Right table
 
 rowToTuple :: Row -> (UserId, Username, Email)
 rowToTuple r = (rid r, name r, email r)
