@@ -21,6 +21,13 @@ description:         Please see the README on GitHub at <https://github.com/etie
 
 dependencies:
 - base >= 4.7 && < 5
+- binary
+- bytestring
+- mtl
+- parsec
+- string-conversions
+- text
+- text-format
 
 library:
   source-dirs: src
@@ -34,14 +41,7 @@ executables:
     - -rtsopts
     - -with-rtsopts=-N
     dependencies:
-    - binary
-    - bytestring
     - db
-    - mtl
-    - parsec
-    - string-conversions
-    - text
-    - text-format
 
 tests:
   db-test:
@@ -53,3 +53,7 @@ tests:
     - -with-rtsopts=-N
     dependencies:
     - db
+    - tasty
+    - tasty-hspec
+    - hspec
+    - hspec-expectations
