@@ -41,6 +41,13 @@ import System.IO
 data MetaCommand = Exit
   deriving (Read)
 
+data MetaCommandParserError = UnrecognizedCommand String
+
+instance Show MetaCommandParserError where
+  show (UnrecognizedCommand i) = convertString
+                                 $ Fmt.format "Unrecognized command '{}'.\n"
+                                 (Fmt.Only i)
+
 metaCommands :: [(String, MetaCommand)]
 metaCommands =
   [ (".exit", Exit) ]
@@ -53,6 +60,15 @@ metaParser :: Parser Char
 metaParser = char '.'
 
 data Statement = Select | Insert Row
+
+data StatementParserError = UnrecognizedStatement String
+                         | SyntaxError
+
+instance Show StatementParserError where
+  show (UnrecognizedStatement i) = convertString
+                                   $ Fmt.format "Unrecognized keyword at start of '{}'."
+                                   (Fmt.Only i)
+  show SyntaxError = "Syntax error. Could not parse statement."
 
 statementTypeParser :: Parser String
 statementTypeParser = choice
@@ -202,34 +218,34 @@ main = do
       (const $ handleStatement input initTable)
       (const $ handleMeta input)
       $ parse' metaParser input
-  where
-    handleMeta i = case parse' metaCommandParser i of
-      -- META_COMMAND_UNRECOGNIZED_COMMAND
-      Left e -> Fmt.print "Unrecognized command '{}'\n" (Fmt.Only i)
-      Right c -> executeMetaCommand c
 
-    handleStatement i tableRef = case parse' statementTypeParser i of
-      -- PREPARE_UNRECOGNIZED_STATEMENT
-      Left e -> Fmt.print "Unrecognized keyword at start of '{}'\n" (Fmt.Only i)
+handleMeta :: String -> IO ()
+handleMeta i = case parse' metaCommandParser i of
+  -- META_COMMAND_UNRECOGNIZED_COMMAND
+  Left e -> print $ UnrecognizedCommand i
+  Right c -> executeMetaCommand c
+
+handleStatement :: String -> IORef Table -> IO ()
+handleStatement i tableRef =
+    case parse' statementTypeParser i of
+      Left e -> print $ UnrecognizedStatement i
       Right _ -> case parse' statementParser i of
-        -- PREPARE_SYNTAX_ERROR
-        Left e -> putStrLn "Syntax error. Could not parse statement" 
-        Right c -> do
-          table <- readIORef tableRef
-          statementResult <- executeStatement table c
-          case statementResult of
-            Left TableFull -> putStrLn "Error: Table full."
-            Right t -> do
-              writeIORef tableRef t
-              putStrLn "Success"
+        Left e -> print SyntaxError
+        Right c -> handleStatementOutcome =<< executeStatement c =<< readIORef tableRef
+  where
+    handleStatementOutcome :: Either ExecutionError Table -> IO ()
+    handleStatementOutcome (Left TableFull) = putStrLn "Error: Table full."
+    handleStatementOutcome (Right t) = do
+                                writeIORef tableRef t
+                                putStrLn "Executed."
 
 
 executeMetaCommand :: MetaCommand -> IO ()
 executeMetaCommand = \case
   Exit -> exitSuccess
 
-executeStatement :: Table -> Statement -> IO (Either ExecutionError Table)
-executeStatement t s = go
+executeStatement :: Statement -> Table -> IO (Either ExecutionError Table)
+executeStatement s t = go
   where
     go = case s of
       Insert r -> executeInsert t r
@@ -244,7 +260,7 @@ executeInsert table row = if numberOfRows table >= tableMaxRows
 executeSelect :: Table -> IO (Either ExecutionError Table)
 executeSelect table = do
     let range = [0..(numberOfRows table - 1)]
-    putStrLn $ unlines $ fmap (show . rowToTuple . readSlot table) range
+    putStr $ unlines $ fmap (show . rowToTuple . readSlot table) range
     pure $ Right table
 
 rowToTuple :: Row -> (UserId, Username, Email)
