@@ -54,6 +54,11 @@ metaParser = char '.'
 
 data Statement = Select | Insert Row
 
+statementTypeParser :: Parser String
+statementTypeParser = choice
+                      [ string "select"
+                      , string "insert"]
+
 selectParser :: Parser Statement
 selectParser = do
   _ <- string "select"
@@ -199,21 +204,24 @@ main = do
       $ parse' metaParser input
   where
     handleMeta i = case parse' metaCommandParser i of
-      Left e -> do
-        Fmt.print "Unrecognized command '{}'" (Fmt.Only i)
-      Right c -> do
-        executeMetaCommand c
-    handleStatement i tableRef = case parse' statementParser i of
-      Left e -> do
-        Fmt.print "Unrecognized keyword at start of '{}'" (Fmt.Only i)
-      Right c -> do
-        table <- readIORef tableRef
-        statementResult <- executeStatement table c
-        case statementResult of
-          Left TableFull -> putStrLn "Error: Table full."
-          Right t -> do
-            writeIORef tableRef t
-            putStrLn "Success"
+      -- META_COMMAND_UNRECOGNIZED_COMMAND
+      Left e -> Fmt.print "Unrecognized command '{}'\n" (Fmt.Only i)
+      Right c -> executeMetaCommand c
+
+    handleStatement i tableRef = case parse' statementTypeParser i of
+      -- PREPARE_UNRECOGNIZED_STATEMENT
+      Left e -> Fmt.print "Unrecognized keyword at start of '{}'\n" (Fmt.Only i)
+      Right _ -> case parse' statementParser i of
+        -- PREPARE_SYNTAX_ERROR
+        Left e -> putStrLn "Syntax error. Could not parse statement" 
+        Right c -> do
+          table <- readIORef tableRef
+          statementResult <- executeStatement table c
+          case statementResult of
+            Left TableFull -> putStrLn "Error: Table full."
+            Right t -> do
+              writeIORef tableRef t
+              putStrLn "Success"
 
 
 executeMetaCommand :: MetaCommand -> IO ()
