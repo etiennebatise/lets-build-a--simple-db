@@ -25,6 +25,7 @@ dependencies:
 - bytestring
 - mtl
 - parsec
+- parser-combinators
 - string-conversions
 - text
 - text-format
@@ -55,5 +56,6 @@ tests:
     - db
     - tasty
     - tasty-hspec
+    - tasty-hunit
     - hspec
     - hspec-expectations

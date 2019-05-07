@@ -18,9 +18,10 @@ import Data.Tuple (uncurry, swap)
 import Data.Word
 import System.Exit
 import System.IO
+import Text.Parsec.Error (errorMessages, messageString)
 
-import Db.Parser
 import Db.Db
+import Db.Parser
 
 data ExecutionError = TableFull
 
@@ -45,11 +46,10 @@ handleMeta i = case parse' metaCommandParser i of
 
 handleStatement :: String -> IORef Table -> IO ()
 handleStatement i tableRef =
-    case parse' statementTypeParser i of
-      Left e -> print $ UnrecognizedStatement i
-      Right _ -> case parse' statementParser i of
-        Left e -> print SyntaxError
-        Right c -> handleStatementOutcome =<< executeStatement c =<< readIORef tableRef
+    case parse' statementParser i of
+      -- Left e -> putStrLn $ messageString $ last $ errorMessages e
+      Left e -> print e
+      Right c -> handleStatementOutcome =<< executeStatement c =<< readIORef tableRef
   where
     handleStatementOutcome :: Either ExecutionError Table -> IO ()
     handleStatementOutcome (Left e) = print e

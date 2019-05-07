@@ -40,7 +40,7 @@ data Row = Row
   { rid :: UserId
   , name :: Username
   , email :: Email
-  } deriving Show
+  } deriving (Show, Eq)
 
 class Serializable a where
   serialize :: a -> LB.ByteString
