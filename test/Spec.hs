@@ -56,7 +56,10 @@ insertParserTestCases =
 
 dbTests = testGroup "DB" []
 
-executionTests = testGroup "Execution" []
+executionTests = testGroup "Execution" executionTestCases
+
+executionTestCases =
+  []
 
 
 usernameSize' = fromIntegral usernameSize
