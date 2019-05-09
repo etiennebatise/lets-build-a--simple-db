@@ -6,14 +6,14 @@ import          Control.Monad.Combinators (count')
 import          Control.Monad (join)
 import           Data.String.Conversions
 import qualified Data.Text.Format as Fmt
-import           Text.Parsec (Parsec, ParsecT, Stream, parse, try, choice, token, many, many1, (<?>), skipMany1, (<|>), getInput, lookAhead)
+import           Text.Parsec (Parsec, ParsecT, Stream, parse, try, choice, token, many, many1, (<?>), skipMany, skipMany1, (<|>), getInput, lookAhead)
 import           Text.Parsec.Char (string, char, satisfy, spaces, digit, alphaNum, letter, space)
 import           Text.Parsec.Combinator (notFollowedBy)
 import           Text.Parsec.Error
 import           Text.Parsec.Prim (unexpected)
 import           Text.Parsec.String (Parser)
 
-import           Db.Db (Row(..), UserId, Username, Email)
+import           Db.Db (Row(..), UserId, Username, Email, usernameSize, emailSize)
 
 data MetaCommand = Exit
   deriving (Read)
@@ -42,6 +42,7 @@ data Statement = Select | Insert Row deriving (Show, Eq)
 data StatementParserError = UnrecognizedStatement String
                          | SyntaxError
                          | StringTooLong
+                         | IdNegative
 
 instance Show StatementParserError where
   show (UnrecognizedStatement i) = convertString
@@ -49,11 +50,8 @@ instance Show StatementParserError where
                                    (Fmt.Only i)
   show SyntaxError = "Syntax error. Could not parse statement."
   show StringTooLong = "String is too long."
+  show IdNegative = "ID must be positive."
 
--- statementTypeParser :: Parser String
--- statementTypeParser = choice
---                       [ string "select"
---                       , string "insert"]
 
 selectParser :: Parser Statement
 selectParser = do
@@ -71,18 +69,37 @@ insertParser = do
     parseParams :: Parser (UserId, Username, Email)
     parseParams = do
       _      <- skipMany1 space            <|> fail (show SyntaxError)
-      userId <- many1 digit                <|> fail (show SyntaxError)
+      userId <- parseId
       _      <- skipMany1 space            <|> fail (show SyntaxError)
       name   <- parseName
-      email  <- many1 alphaNum             <|> fail (show SyntaxError)
-      pure (read userId, name, email)
+      email  <- parseEmail
+
+      pure (userId, name, email)
+
+    parseId :: Parser UserId
+    parseId = do
+      _      <- notFollowedBy' (lookAhead $ char '-') <|> fail (show IdNegative)
+      userId <- many1 digit
+      pure $ read userId
 
     parseName :: Parser Username
     parseName = do
-      name   <- count' 1 32 letter                  <|> fail (show SyntaxError)
-      _      <- notFollowedBy' (lookAhead alphaNum) <|> fail (show StringTooLong)
-      _      <- skipMany1 space                     <|> fail (show SyntaxError)
+      name <- count' 1 usernameSize' letter       <|> fail (show SyntaxError)
+      _    <- notFollowedBy' (lookAhead alphaNum) <|> fail (show StringTooLong)
+      _    <- skipMany1 space                     <|> fail (show SyntaxError)
       pure name
+
+    parseEmail :: Parser Email
+    parseEmail = do
+      email <- count' 1 emailSize' letter          <|> fail (show SyntaxError)
+      _     <- notFollowedBy' (lookAhead alphaNum) <|> fail (show StringTooLong)
+      _     <- spaces                              <|> fail (show SyntaxError)
+      _     <- notFollowedBy' (lookAhead alphaNum) <|> fail (show SyntaxError)
+      pure email
+
+    usernameSize' = fromIntegral usernameSize
+
+    emailSize' = fromIntegral emailSize
 
 statementParser :: Parser Statement
 statementParser = choice [ selectParser, insertParser ]
